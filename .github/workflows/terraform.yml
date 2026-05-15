@@ -86,8 +86,8 @@ jobs:
       - name: Terraform Plan
         id: plan
         run: |
-          terraform plan \
-           terraform plan \
+          terraform plan 
+           terraform plan 
             -var="db_password=${{ secrets.DEV_DB_PASSWORD }}" \
             -var="jwt_secret=${{ secrets.DEV_JWT_SECRET }}" \
             -var="github_org=Balasai234" \
@@ -156,8 +156,8 @@ jobs:
 
       - name: Terraform Apply
         run: |
-          terraform apply \
-            -auto-approve \
+          terraform apply 
+            -auto-approve 
             -no-color \
             tfplan
 
@@ -206,7 +206,7 @@ jobs:
 
       - name: Terraform Destroy
         run: |
-          terraform destroy \
+          terraform destroy 
             -var="db_password=${{ secrets.DEV_DB_PASSWORD }}" \
             -var="jwt_secret=${{ secrets.DEV_JWT_SECRET }}" \
             -var="github_org=Balasai234" \
