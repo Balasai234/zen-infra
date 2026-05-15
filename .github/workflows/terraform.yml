@@ -1,63 +1,72 @@
 name: Terraform Infrastructure
 
-# PR to main        → plan only
-# Push/merge to main → plan (auto) → approval gate → apply
-# Manual dispatch    → plan, apply, or destroy dev environment
-
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'envs/dev/**'
-      - 'modules/**'
   pull_request:
-    branches: [main]
-    paths:
-      - 'envs/dev/**'
-      - 'modules/**'
+    branches:
+      - main
+
   workflow_dispatch:
     inputs:
+      environment:
+        description: 'Select environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - qa
+          - prod
+
       action:
         description: 'Terraform action'
         required: true
         default: 'plan'
         type: choice
-        options: [plan, apply, destroy]
-      confirm_destroy:
-        description: 'Type "destroy" to confirm destruction (required when action=destroy)'
-        required: false
-        default: ''
+        options:
+          - plan
+          - apply
+          - destroy
 
-permissions:
-  contents: read
+      confirm_destroy:
+        description: 'Type destroy to confirm destroy operation'
+        required: false
 
 env:
-  TF_VERSION: '1.10.0'
+  TF_VERSION: 1.10.5
   AWS_REGION: us-east-1
 
-# Prevent parallel runs on the same branch — avoids state conflicts
 concurrency:
-  group: terraform-${{ github.ref }}
-  cancel-in-progress: false   # wait, don't cancel — safer for Terraform
+  group: terraform-${{ github.ref }}-${{ github.event.inputs.environment || 'dev' }}
+  cancel-in-progress: false
 
 jobs:
-  # ── Plan ──────────────────────────────────────────────────────────────────
+
+  # ─────────────────────────────────────────────────────────────
+  # Terraform Plan
+  # ─────────────────────────────────────────────────────────────
+
   plan:
     name: Terraform Plan
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        environment: [dev, qa, prod]
+
     defaults:
       run:
-        working-directory: envs/dev
+        working-directory: envs/${{ matrix.environment }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Setup Terraform ${{ env.TF_VERSION }}
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Configure AWS credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -65,68 +74,70 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Terraform Format Check
-        id: fmt
         run: terraform fmt -check -recursive
         continue-on-error: true
 
       - name: Terraform Init
-        id: init
         run: terraform init
 
       - name: Terraform Validate
-        id: validate
-        run: terraform validate -no-color
+        run: terraform validate
 
       - name: Terraform Plan
         id: plan
         run: |
           terraform plan \
-            -var="db_password=${{ secrets.DEV_DB_PASSWORD }}" \
-            -var="jwt_secret=${{ secrets.DEV_JWT_SECRET }}" \
+            -var="db_password=${{ secrets[format('{0}_DB_PASSWORD', upper(matrix.environment))] }}" \
+            -var="jwt_secret=${{ secrets[format('{0}_JWT_SECRET', upper(matrix.environment))] }}" \
             -var="github_org=Balasai234" \
             -out=tfplan \
             -no-color
         continue-on-error: true
 
-      - name: Check plan status
+      - name: Check Plan Status
         if: steps.plan.outcome == 'failure'
         run: exit 1
 
-      - name: Release state lock on failure
+      - name: Release State Lock On Failure
         if: failure() || cancelled()
         run: |
-          aws s3 rm s3://${{ vars.TF_STATE_BUCKET }}/envs/dev/terraform.tfstate.tflock || true
+          aws s3 rm s3://${{ vars.TF_STATE_BUCKET }}/envs/${{ matrix.environment }}/terraform.tfstate.tflock || true
 
-      - name: Upload plan file
+      - name: Upload Plan File
         if: steps.plan.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: tfplan
-          path: envs/dev/tfplan
+          name: tfplan-${{ matrix.environment }}
+          path: envs/${{ matrix.environment }}/tfplan
           retention-days: 1
 
-  # ── Apply ─────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────
+  # Terraform Apply
+  # ─────────────────────────────────────────────────────────────
+
   apply:
     name: Terraform Apply
     runs-on: ubuntu-latest
     needs: plan
-    if: |
-      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
-    environment: dev   # ← pauses here and waits for manual approval
+
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply'
+
+    environment: ${{ github.event.inputs.environment }}
+
     defaults:
       run:
-        working-directory: envs/dev
+        working-directory: envs/${{ github.event.inputs.environment }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Setup Terraform ${{ env.TF_VERSION }}
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Configure AWS credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -136,11 +147,11 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
-      - name: Download plan file
+      - name: Download Plan File
         uses: actions/download-artifact@v4
         with:
-          name: tfplan
-          path: envs/dev
+          name: tfplan-${{ github.event.inputs.environment }}
+          path: envs/${{ github.event.inputs.environment }}
 
       - name: Terraform Apply
         run: |
@@ -149,33 +160,40 @@ jobs:
             -no-color \
             tfplan
 
-      - name: Release state lock on failure
+      - name: Release State Lock On Failure
         if: failure() || cancelled()
         run: |
-          aws s3 rm s3://${{ vars.TF_STATE_BUCKET }}/envs/dev/terraform.tfstate.tflock || true
+          aws s3 rm s3://${{ vars.TF_STATE_BUCKET }}/envs/${{ github.event.inputs.environment }}/terraform.tfstate.tflock || true
 
-  # ── Destroy ───────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────
+  # Terraform Destroy
+  # ─────────────────────────────────────────────────────────────
+
   destroy:
     name: Terraform Destroy
     runs-on: ubuntu-latest
+
     if: |
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.action == 'destroy' &&
       github.event.inputs.confirm_destroy == 'destroy'
-    environment: dev   # ← approval gate for destroy too
+
+    environment: ${{ github.event.inputs.environment }}
+
     defaults:
       run:
-        working-directory: envs/dev
+        working-directory: envs/${{ github.event.inputs.environment }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Setup Terraform ${{ env.TF_VERSION }}
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Configure AWS credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -188,13 +206,13 @@ jobs:
       - name: Terraform Destroy
         run: |
           terraform destroy \
-            -var="db_password=${{ secrets.DEV_DB_PASSWORD }}" \
-            -var="jwt_secret=${{ secrets.DEV_JWT_SECRET }}" \
-            -var="github_org=${{ vars.GH_ORG }}" \
+            -var="db_password=${{ secrets[format('{0}_DB_PASSWORD', upper(github.event.inputs.environment))] }}" \
+            -var="jwt_secret=${{ secrets[format('{0}_JWT_SECRET', upper(github.event.inputs.environment))] }}" \
+            -var="github_org=Balasai234" \
             -auto-approve \
             -no-color
 
-      - name: Release state lock on failure
+      - name: Release State Lock On Failure
         if: failure() || cancelled()
         run: |
-          aws s3 rm s3://${{ vars.TF_STATE_BUCKET }}/envs/dev/terraform.tfstate.tflock || true
+          aws s3 rm s3://${{ vars.TF_STATE_BUCKET }}/envs/${{ github.event.inputs.environment }}/terraform.tfstate.tflock || true
