@@ -10,7 +10,7 @@ variable "jwt_secret" {
   sensitive   = true
 }
 
-variable "github_org" { # Added my GitHub username as default value for github_org variable in dev, qa, and prod environments, so that we can run terraform plan without needing to provide this variable value every time.
+variable "github_org" { # Added my GitHub username as default value for github_org variable in dev, so that we can run terraform plan without needing to provide this variable value every time.
   description = "GitHub username or organization that owns zen-pharma-frontend and zen-pharma-backend (e.g. john-smith)"
   type        = string
   default     = "Balasai234"
