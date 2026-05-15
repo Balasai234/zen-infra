@@ -10,7 +10,7 @@ variable "jwt_secret" {
   sensitive   = true
 }
 
-variable "github_org" {
+variable "github_org" { # Added my GitHub username as default value for github_org variable in dev, qa, and prod environments
   description = "GitHub username or organization that owns zen-pharma-frontend and zen-pharma-backend (e.g. john-smith)"
   type        = string
   default     = "Balasai234"
