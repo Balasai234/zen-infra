@@ -40,8 +40,8 @@ resource "aws_db_instance" "main" {
   identifier              = "${var.project}-${var.env}-postgres"
   engine                  = "postgres"
   engine_version          = "15.7"
-  instance_class          = "db.invalid"
-  allocated_storage       = 1
+  instance_class          = "db.t3.small"
+  allocated_storage       = 20
   storage_type            = "gp2"
   db_name                 = var.db_name
   username                = var.db_username
